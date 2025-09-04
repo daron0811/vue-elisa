@@ -15,7 +15,6 @@ export function exportExcel(opts: {
 }) {
   const wb = XLSX.utils.book_new();
 
-  // Sheet 1: Summary
   const header = ['Sample','n','OD mean','OD SD','Raw conc','Dilution','Final conc ('+opts.unit+')','Final SD','CV%','Flags'];
   const rows = opts.items.map(r => [
     `${r.kind}${r.idx}`, r.n,
@@ -29,7 +28,6 @@ export function exportExcel(opts: {
   const ws1 = XLSX.utils.aoa_to_sheet([header, ...rows]);
   XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
 
-  // Sheet 2: Standards (for plotting)
   const stdHeader = ['Concentration', 'OD'];
   const stdRows = opts.stdPoints.map(p => [p.x, p.y]);
   const ws2 = XLSX.utils.aoa_to_sheet([stdHeader, ...stdRows]);
