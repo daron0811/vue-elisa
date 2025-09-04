@@ -50,10 +50,16 @@ const res = computed(() => store.result);
 
 async function onAnalyze() {
     err.value = ''; busy.value = true;
-    try { await store.analyze(); }
-    catch (e: any) { err.value = e?.message || '分析失敗'; }
-    finally { busy.value = false; }
+    try {
+        await store.analyze();
+        store.computeBackcalc(); // ⬅️ 加這行：擬合完成後做反算
+    } catch (e: any) {
+        err.value = e?.message || '分析失敗';
+    } finally {
+        busy.value = false;
+    }
 }
+
 </script>
 
 <style scoped>
