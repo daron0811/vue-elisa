@@ -1,0 +1,10 @@
+:root {
+    --col-s: #E6F0FF;
+    /* Standard */
+    --col-u: #E6FFED;
+    /* Unknown */
+    --col-c: #FFF6E6;
+    /* Control */
+    --col-bl: #F2F2F2;
+    /* Blank */
+}

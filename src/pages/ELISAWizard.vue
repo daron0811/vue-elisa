@@ -1,13 +1,14 @@
 <template>
     <main class="wizard">
         <ODPaste />
-        <!-- 後續步驟會依序加上：PlateEditor、StandardsForm、DilutionForm、AnalysisPanel... -->
+        <PlateEditor />
     </main>
 </template>
 
 
 <script setup lang="ts">
 import ODPaste from '@/components/ODPaste.vue';
+import PlateEditor from '@/components/PlateEditor.vue';
 </script>
 
 
