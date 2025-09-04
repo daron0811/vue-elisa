@@ -4,16 +4,18 @@
         <PlateEditor />
         <StandardsForm />
         <DilutionForm />
+        <AnalysisPanel />
     </main>
 </template>
-
 
 <script setup lang="ts">
 import ODPaste from '@/components/ODPaste.vue';
 import PlateEditor from '@/components/PlateEditor.vue';
 import StandardsForm from '@/components/StandardsForm.vue';
 import DilutionForm from '@/components/DilutionForm.vue';
+import AnalysisPanel from '@/components/AnalysisPanel.vue';
 </script>
+
 
 
 <style scoped>
