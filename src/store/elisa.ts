@@ -17,6 +17,16 @@ export interface ElisaState {
     od: number[][]; // 8x12 原始 OD
     // M2
     plate: WellCell[][]; // 8x12 版型（S/U/C/BL/空 + 編號）
+    // M3
+    standards: StandardsState;
+}
+
+export interface StandardsState {
+    unit: string; // 例如 'ng/mL'
+    standards: Record<number, number>; // S1..Sn 的濃度
+    defaultDilution: { U: number; C: number };
+    dilutionU: Record<number, number>; // U1..Un 的客製稀釋倍數
+    dilutionC: Record<number, number>; // C1..Cn 的客製稀釋倍數
 }
 
 
@@ -24,14 +34,28 @@ export type FillDirection = 'row' | 'col';
 export type ReplicateDir = 'h' | 'v';
 
 
+// === 修改 state 初始值 ===
 export const useElisaStore = defineStore('elisa', {
     state: (): ElisaState => ({
         od: makeZeroGrid(8, 12),
         plate: makePlate(8, 12),
+        standards: {
+            unit: 'ng/mL',
+            standards: {},
+            defaultDilution: { U: 1, C: 1 },
+            dilutionU: {},
+            dilutionC: {},
+        },
     }),
     getters: {
         odRows: (s) => s.od,
         plateRows: (s) => s.plate,
+
+
+        // 目前版面中存在的 S/U/C 索引（依數字由小到大）
+        standardIndices: (s) => indicesOf(s.plate, 'S'),
+        unknownIndices: (s) => indicesOf(s.plate, 'U'),
+        controlIndices: (s) => indicesOf(s.plate, 'C'),
     },
     actions: {
         // ===== M1: OD =====
@@ -155,5 +179,79 @@ export const useElisaStore = defineStore('elisa', {
                 curIdx++;
             }
         },
+
+        // ====== M3 Standards ======
+        setStandard(idx: number, val: number) {
+            this.standards.standards[idx] = Number(val) || 0;
+        },
+        setUnit(u: string) { this.standards.unit = u; },
+
+
+        autofillStandardsByGradient(start: number, fold: number) {
+            const list = this.standardIndices; // 依 plate 現況
+            if (!list.length) return;
+            const N = list.length;
+            const values = serialDilution(start, fold, N);
+            list.forEach((idx, i) => { this.standards.standards[idx] = values[i]; });
+        },
+
+
+        // ====== M3 Dilution ======
+        setDefaultDilutionU(v: number) { this.standards.defaultDilution.U = clampDil(v); },
+        setDefaultDilutionC(v: number) { this.standards.defaultDilution.C = clampDil(v); },
+
+
+        setDilution(type: 'U' | 'C', idx: number, v: number) {
+            if (type === 'U') this.standards.dilutionU[idx] = clampDil(v);
+            else this.standards.dilutionC[idx] = clampDil(v);
+        },
+
+
+        applyDilutionRange(type: 'U' | 'C', start: number, end: number, v: number) {
+            const set = type === 'U' ? this.unknownIndices : this.controlIndices;
+            const lo = Math.min(start, end), hi = Math.max(start, end);
+            for (const idx of set) if (idx >= lo && idx <= hi) this.setDilution(type, idx, v);
+        },
+        // 清理：若 plate 已不含某編號，移除對應資料
+        syncWithPlate() {
+            const S = new Set(this.standardIndices);
+            const U = new Set(this.unknownIndices);
+            const C = new Set(this.controlIndices);
+            // 標準品濃度
+            for (const k of Object.keys(this.standards.standards)) {
+                const idx = Number(k);
+                if (!S.has(idx)) delete this.standards.standards[idx];
+            }
+            // 稀釋倍數
+            for (const k of Object.keys(this.standards.dilutionU)) {
+                const idx = Number(k);
+                if (!U.has(idx)) delete this.standards.dilutionU[idx];
+            }
+            for (const k of Object.keys(this.standards.dilutionC)) {
+                const idx = Number(k);
+                if (!C.has(idx)) delete this.standards.dilutionC[idx];
+            }
+        },
     },
 });
+
+// ====== 輔助：由 plate 萃取現存索引 ======
+function indicesOf(plate: WellCell[][], type: WellType): number[] {
+    const set = new Set<number>();
+    for (const row of plate) for (const cell of row) if (cell.type === type && typeof cell.idx === 'number') set.add(cell.idx);
+    return Array.from(set).sort((a, b) => a - b);
+}
+
+
+// 序列稀釋：start, start/fold, start/fold^2, ... N 筆
+function serialDilution(start: number, fold: number, N: number): number[] {
+    const s = Number(start) || 0;
+    const f = Number(fold) || 1;
+    const arr: number[] = [];
+    for (let i = 0; i < N; i++) arr.push(round3(s / Math.pow(Math.max(f, 1e-9), i)));
+    return arr;
+}
+
+
+function round3(x: number) { return Math.round(x * 1000) / 1000; }
+function clampDil(v: number) { const n = Number(v) || 1; return n < 1 ? 1 : n; }
