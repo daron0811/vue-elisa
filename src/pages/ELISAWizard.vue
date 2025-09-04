@@ -5,6 +5,7 @@
         <StandardsForm />
         <DilutionForm />
         <AnalysisPanel />
+        <ResultsPanel /> <!-- ⬅️ NEW -->
     </main>
 </template>
 
@@ -14,8 +15,8 @@ import PlateEditor from '@/components/PlateEditor.vue';
 import StandardsForm from '@/components/StandardsForm.vue';
 import DilutionForm from '@/components/DilutionForm.vue';
 import AnalysisPanel from '@/components/AnalysisPanel.vue';
+import ResultsPanel from '@/components/ResultsPanel.vue';
 </script>
-
 
 
 <style scoped>

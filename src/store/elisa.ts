@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia';
 import { makeZeroGrid, parseODGrid } from '@/composables/useODParser';
-import { mean, Model } from '@/utils/math';
+import { mean, Model, /* ... */ invertY } from '@/utils/math';
 import { runFit } from '@/services/fit';
+
 
 export type WellType = 'S' | 'U' | 'C' | 'BL' | '';
 export interface WellCell { r: number; c: number; type: WellType; idx?: number }
@@ -15,6 +16,21 @@ export interface StandardsState {
     defaultDilution: { U: number; C: number };
     dilutionU: Record<number, number>;
     dilutionC: Record<number, number>;
+}
+
+export interface BackcalcItem {
+    kind: 'U' | 'C';
+    idx: number;
+    n: number;                       // 複本數
+    odMean: number;                  // (若扣BL則為扣後) OD 平均
+    odSD: number;
+    dilution: number;                // 使用的稀釋倍數
+    concRawMean: number;             // 反算原始濃度（未乘稀釋）
+    concRawSD: number;
+    concFinalMean: number;           // 乘稀釋後
+    concFinalSD: number;
+    cvPct: number;                   // 最終濃度 CV%
+    flags: string[];                 // 訊號/提示（如 OOR、無有效複本、CV高等）
 }
 
 export type FillDirection = 'row' | 'col';
@@ -31,6 +47,7 @@ export interface ElisaState {
     standards: StandardsState;
     options: AnalysisOptions;
     result: AnalysisResult | null;
+    backcalc?: BackcalcItem[];       // ⬅️ 新增：M5 計算結果
 }
 
 export const useElisaStore = defineStore('elisa', {
@@ -40,6 +57,7 @@ export const useElisaStore = defineStore('elisa', {
         standards: { unit: 'ng/mL', standards: {}, defaultDilution: { U: 1, C: 1 }, dilutionU: {}, dilutionC: {} },
         options: { model: '4PL', plot: 'semi-log', subtractBlank: false },
         result: null,
+        backcalc: [],
     }),
     getters: {
         odRows: (s) => s.od,
@@ -153,6 +171,81 @@ export const useElisaStore = defineStore('elisa', {
 
             this.result = { params: normalizeParams(res, this.options.model), stdPoints: pts, curve: { xs: grid, ys: ysCurve } };
         },
+        computeBackcalc() {
+            if (!this.result) { this.backcalc = []; return; }
+
+            // 1) 蒐集 Unknown / Control 的 raw OD（聚合時一起拿 BL 平均）
+            const { acc, blAvg } = this.aggregate();
+            const minus = this.options.subtractBlank ? blAvg : 0;
+
+            // 曲線參數＆模型
+            const model = this.options.model;
+            const params = this.result.params;
+            const unit = this.standards.unit || 'ng/mL';
+
+            // 供 OOR 判斷的標準品 X/Y 範圍
+            const xsStd = this.result.stdPoints.map(p => p.x);
+            const ysStd = this.result.stdPoints.map(p => p.y);
+            const xMin = Math.min(...xsStd), xMax = Math.max(...xsStd);
+            const yMin = Math.min(...ysStd), yMax = Math.max(...ysStd);
+
+            const list: BackcalcItem[] = [];
+            const doOneKind = (kind: 'U' | 'C', idxList: number[], dilMap: Record<number, number>, defDil: number) => {
+                for (const idx of idxList) {
+                    const key = `${kind}${idx}`;
+                    const raw = (acc[key] ?? []).map(v => v - minus); // 扣BL（若有勾選）
+                    const dilution = Math.max(1, Number(dilMap[idx] ?? defDil) || 1);
+
+                    const concRawVals = raw.map(y => invertY(model, params, y));
+                    // OOR: 以 x 超出標準品範圍 或 y 超出標準點 y 範圍 視為 OOR
+                    const flags = new Set<string>();
+                    const valid = concRawVals.filter(v => Number.isFinite(v) && v > 0);
+                    const concFinalVals = valid.map(v => v * dilution);
+
+                    // 統計
+                    const meanOf = (arr: number[]) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : NaN;
+                    const sdOf = (arr: number[]) => {
+                        if (arr.length <= 1) return 0;
+                        const m = meanOf(arr); const v = arr.reduce((s, x) => s + (x - m) * (x - m), 0) / arr.length; return Math.sqrt(v);
+                    };
+
+                    // OOR 偵測（只要有任一複本落在 OOR 就記）
+                    raw.forEach((y, i) => {
+                        const x = concRawVals[i];
+                        if (!Number.isFinite(x)) { flags.add('無法反算'); return; }
+                        if (x < xMin || x > xMax || y < yMin || y > yMax) flags.add('OOR'); // out-of-range
+                        if (y <= 0) flags.add('非正 OD');
+                    });
+
+                    const odMean = meanOf(raw);
+                    const odSD = sdOf(raw);
+                    const concRawMean = meanOf(valid);
+                    const concRawSD = sdOf(valid);
+                    const concFinalMean = Number.isFinite(concRawMean) ? concRawMean * dilution : NaN;
+                    const concFinalSD = Number.isFinite(concRawSD) ? concRawSD * dilution : NaN;
+                    const cvPct = (Number.isFinite(concFinalMean) && concFinalMean !== 0) ? (concFinalSD / Math.abs(concFinalMean)) * 100 : NaN;
+
+                    if (!valid.length) flags.add('無有效複本');
+
+                    list.push({
+                        kind, idx, n: raw.length,
+                        odMean, odSD,
+                        dilution,
+                        concRawMean, concRawSD,
+                        concFinalMean, concFinalSD,
+                        cvPct,
+                        flags: Array.from(flags),
+                    });
+                }
+            };
+
+            doOneKind('U', this.unknownIndices, this.standards.dilutionU, this.standards.defaultDilution.U);
+            doOneKind('C', this.controlIndices, this.standards.dilutionC, this.standards.defaultDilution.C);
+
+            // 以 U 在前、C 在後排序
+            this.backcalc = list.sort((a, b) => (a.kind === b.kind) ? a.idx - b.idx : (a.kind === 'U' ? -1 : 1));
+        },
+
     },
 });
 
